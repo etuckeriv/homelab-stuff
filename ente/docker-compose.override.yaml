@@ -28,7 +28,7 @@ services:
     # !! Check special instructions in the "labels" block
     container_name: ente_museum
     # !! UnComment the "depends_on" line below if using a pre-existing postgres database
-    depends_on: !override []
+    # depends_on: !override []
     networks:
       - ${TRAEFIK_PROXY_NETWORK}
       - ${BACKEND_NETWORK}
@@ -75,7 +75,7 @@ services:
     # !! Check special instructions in the "profiles" block
     container_name: ente_postgres
     # !! UnComment the "profiles" line below to use a pre-existing db & disable the ente provided db, remember to update db credentials in "credentials.yaml"
-    profiles: ["local-db"]
+    # profiles: ["local-db"]
     networks:
       - ${BACKEND_NETWORK}
     volumes:
