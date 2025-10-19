@@ -1,0 +1,205 @@
+# Step 1: Run the 1-Click Install Script from Ente (https://ente.io/help/self-hosting/)
+# Step 1a: Choose "n" when asked "Do you want to start Ente?"
+# Step 2: Drop this "docker-compose.override.yaml" file into the newly created "my-ente" directly alongside the newly generated "compose.yaml" file
+# Step 2a: Update the networks to your network names in the "networks:" block below these comments
+# Step 3: Drop the ".env" file in the same directory and fill in your values
+# Step 3a: For Postgres and Minio credentials, copy them over from the original "compse.yaml" file
+# Step 4: Drop the "credentials.yaml" file into the same directory and fill in your values
+# Step 4a: Comment out the lines for Postgres in your newly generated "museum.yaml" file
+# Step 4b: Be sure to add the URLs for your apps into the "apps:" section of your newly generated "museum.yaml" file ()
+# Step 5: Review the !! comments in this file below for any special conditions (namely those in the 'museum' and 'postgres' container blocks)
+# Step 6: Spin up the stack with `docker compose up -d`
+# Step 6a: Follow the Post-Install directions at https://ente.io/help/self-hosting/installation/post-install/
+# Step 6b: To increase storage, follow the ente-cli instructions here - https://ente.io/help/self-hosting/administration/cli#step-4-increase-storage-and-account-validity
+# Your web portal will be reachable at the url you set for "ENTE_WEB_HOST_PREFIX"
+# Your desktop and mobile apps will connect directly to your museum URL set in "ENTE_MUSEUM_HOST_PREFIX"
+# You can install ente-cli and increase the storage limit here - https://ente.io/help/self-hosting/administration/cli
+
+networks:
+  traefik: # !! Be sure to update with your traefik proxy network name
+    external: true
+  backend: # !! Be sure to update with your backend network name
+    external: true
+
+services:
+  
+  museum:
+    # !! Check special instructions in the "depends_on" block
+    # !! Check special instructions in the "labels" block
+    container_name: ente_museum
+    # !! UnComment the "depends_on" line below if using a pre-existing postgres database
+    depends_on: !override []
+    networks:
+      - ${TRAEFIK_PROXY_NETWORK}
+      - ${BACKEND_NETWORK}
+    ports: !override []
+      # - 8080:8080 # API
+    environment:
+      ENTE_CREDENTIALS_FILE: ./credentials.yaml
+    volumes:
+      - ./museum.yaml:/museum.yaml:ro
+      - ./data:/data:ro
+      - ./credentials.yaml:/credentials.yaml
+    healthcheck: # modified healthcheck with wget since stock ente-museum image doesn't have curl preinstalled
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/ping"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      # eanble traefik
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_PROXY_NETWORK}
+      
+      # traefik host routers for ente-museum
+      - traefik.http.routers.ente-museum.rule=Host(`${ENTE_MUSEUM_HOST_PREFIX}.${EXTERNAL_DOMAIN}`)
+      - traefik.http.routers.ente-museum.entrypoints=${TRAEFIK_EXTERNAL_ENTRYPOINT_HTTPS}
+      - traefik.http.routers.ente-museum.service=ente-museum
+      - traefik.http.routers.ente-museum.tls.certresolver=${CERTIFICATE_RESOLVER_NAME}
+            
+      # traefik services
+      - traefik.http.services.ente-museum.loadbalancer.server.port=8080
+
+      # traefik CORS middlewares
+      # !! (UnComment the labels below if you have issues uploading. See https://ente.io/help/self-hosting/administration/object-storage#cors-cross-origin-resource-sharing)
+      # - traefik.http.routers.ente-museum.middlewares=ente-museum 
+      # - traefik.http.middlewares.ente-museum.headers.accesscontrolallowmethods=GET,HEAD,POST,PUT,DELETE
+      # - traefik.http.middlewares.ente-museum.headers.accesscontrolallowheaders=*
+      # - traefik.http.middlewares.ente-museum.headers.accesscontrolalloworiginlist=https://${ENTE_WEB_HOST_PREFIX}.${EXTERNAL_DOMAIN},https://${ENTE_ACCOUNTS_HOST_PREFIX}.${EXTERNAL_DOMAIN},https://${ENTE_ALBUMS_HOST_PREFIX}.${EXTERNAL_DOMAIN},https://${ENTE_AUTH_HOST_PREFIX}.${EXTERNAL_DOMAIN},https://${ENTE_CAST_HOST_PREFIX}.${EXTERNAL_DOMAIN},https://${ENTE_EMBED_HOST_PREFIX}.${EXTERNAL_DOMAIN}
+      # - traefik.http.middlewares.ente-museum.headers.accesscontrolallowcredentials=true
+      # - traefik.http.middlewares.ente-museum.headers.accesscontrolmaxage=3000
+      # - traefik.http.middlewares.ente-museum.headers.accessControlExposeHeaders=ETag
+      # - traefik.http.middlewares.ente-museum.headers.addvaryheader=true
+
+  postgres:
+    # !! Check special instructions in the "profiles" block
+    container_name: ente_postgres
+    # !! UnComment the "profiles" line below to use a pre-existing db & disable the ente provided db, remember to update db credentials in "credentials.yaml"
+    profiles: ["local-db"]
+    networks:
+      - ${BACKEND_NETWORK}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    healthcheck:
+      test: pg_isready -q -d ${POSTGRES_DB} -U ${POSTGRES_USER}
+      start_period: 40s
+      start_interval: 1s
+
+  socat:
+    container_name: ente_socat
+
+  web:
+    container_name: ente_web
+    networks:
+      - ${TRAEFIK_PROXY_NETWORK}
+      - ${BACKEND_NETWORK}
+    ports: !override []
+      # - 3000:3000 # Photos web app
+      # - 3001:3001 # Accounts
+      # - 3002:3002 # Public albums
+      # - 3003:3003 # Auth
+      # - 3004:3004 # Cast
+      # - 3005:3005 # Embed
+    environment:
+      ENTE_API_ORIGIN: https://${ENTE_MUSEUM_HOST_PREFIX}.${EXTERNAL_DOMAIN}
+      ENTE_ALBUMS_ORIGIN: https://${ENTE_ALBUMS_HOST_PREFIX}.${EXTERNAL_DOMAIN}
+    labels:
+      # eanble traefik
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_PROXY_NETWORK}
+      
+      # traefik host routers for ente-web
+      - traefik.http.routers.ente-web.rule=Host(`${ENTE_WEB_HOST_PREFIX}.${EXTERNAL_DOMAIN}`)
+      - traefik.http.routers.ente-web.entrypoints=${TRAEFIK_EXTERNAL_ENTRYPOINT_HTTPS}
+      - traefik.http.routers.ente-web.service=ente-web
+      - traefik.http.routers.ente-web.tls.certresolver=${CERTIFICATE_RESOLVER_NAME}
+
+      # traefik host routers for ente-accounts
+      - traefik.http.routers.ente-accounts.rule=Host(`${ENTE_ACCOUNTS_HOST_PREFIX}.${EXTERNAL_DOMAIN}`)
+      - traefik.http.routers.ente-accounts.entrypoints=${TRAEFIK_EXTERNAL_ENTRYPOINT_HTTPS}
+      - traefik.http.routers.ente-accounts.service=ente-accounts
+      - traefik.http.routers.ente-accounts.tls.certresolver=${CERTIFICATE_RESOLVER_NAME}
+
+      # traefik host routers for ente-albums
+      - traefik.http.routers.ente-albums.rule=Host(`${ENTE_ALBUMS_HOST_PREFIX}.${EXTERNAL_DOMAIN}`)
+      - traefik.http.routers.ente-albums.entrypoints=${TRAEFIK_EXTERNAL_ENTRYPOINT_HTTPS}
+      - traefik.http.routers.ente-albums.service=ente-albums
+      - traefik.http.routers.ente-albums.tls.certresolver=${CERTIFICATE_RESOLVER_NAME}
+
+      # traefik host routers for ente-auth
+      - traefik.http.routers.ente-auth.rule=Host(`${ENTE_AUTH_HOST_PREFIX}.${EXTERNAL_DOMAIN}`)
+      - traefik.http.routers.ente-auth.entrypoints=${TRAEFIK_EXTERNAL_ENTRYPOINT_HTTPS}
+      - traefik.http.routers.ente-auth.service=ente-auth
+      - traefik.http.routers.ente-auth.tls.certresolver=${CERTIFICATE_RESOLVER_NAME}
+
+      # traefik host routers for ente-cast
+      - traefik.http.routers.ente-cast.rule=Host(`${ENTE_CAST_HOST_PREFIX}.${EXTERNAL_DOMAIN}`)
+      - traefik.http.routers.ente-cast.entrypoints=${TRAEFIK_EXTERNAL_ENTRYPOINT_HTTPS}
+      - traefik.http.routers.ente-cast.service=ente-cast
+      - traefik.http.routers.ente-cast.tls.certresolver=${CERTIFICATE_RESOLVER_NAME}
+      
+      # traefik host routers for ente-embed
+      - traefik.http.routers.ente-embed.rule=Host(`${ENTE_EMBED_HOST_PREFIX}.${EXTERNAL_DOMAIN}`)
+      - traefik.http.routers.ente-embed.entrypoints=${TRAEFIK_EXTERNAL_ENTRYPOINT_HTTPS}
+      - traefik.http.routers.ente-embed.service=ente-embed
+      - traefik.http.routers.ente-embed.tls.certresolver=${CERTIFICATE_RESOLVER_NAME}
+      
+      # traefik services
+      - traefik.http.services.ente-web.loadbalancer.server.port=3000
+      - traefik.http.services.ente-accounts.loadbalancer.server.port=3001
+      - traefik.http.services.ente-albums.loadbalancer.server.port=3002
+      - traefik.http.services.ente-auth.loadbalancer.server.port=3003
+      - traefik.http.services.ente-cast.loadbalancer.server.port=3004
+      - traefik.http.services.ente-embed.loadbalancer.server.port=3005
+
+  minio:
+    container_name: ente_minio
+    networks:
+      - ${TRAEFIK_PROXY_NETWORK}
+      - ${BACKEND_NETWORK}
+    ports: !override []
+      # - 3200:3200 # MinIO API
+      # - 3201:3201 # MinIO Web UI
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio-data:/data
+    post_start:
+      - command: |
+          sh -c '
+          #!/bin/sh
+
+          while ! mc alias set h0 http://minio:3200 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD} 2>/dev/null
+          do
+            echo "Waiting for minio..."
+            sleep 0.5
+          done
+
+          cd /data
+
+          mc mb -p b2-eu-cen
+          mc mb -p wasabi-eu-central-2-v3
+          mc mb -p scw-eu-fr-v3
+          '
+    labels:
+      # eanble traefik
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_PROXY_NETWORK}
+      
+      # traefik host routers for ente-minio admin portal
+      - traefik.http.routers.ente-minio-admin.rule=Host(`${ENTE_MINIO_ADMIN_HOST_PREFIX}.${LOCAL_DOMAIN}`)
+      - traefik.http.routers.ente-minio-admin.entrypoints=${TRAEFIK_INTERNAL_ENTRYPOINT_HTTPS}
+      - traefik.http.routers.ente-minio-admin.service=ente-minio-admin
+      - traefik.http.routers.ente-minio-admin.tls.certresolver=${CERTIFICATE_RESOLVER_NAME}
+      
+      # traefik services
+      - traefik.http.services.ente-minio-admin.loadbalancer.server.port=3201
+
+volumes:
+  postgres-data:
+  minio-data:
